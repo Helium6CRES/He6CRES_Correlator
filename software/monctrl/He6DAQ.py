@@ -6,18 +6,18 @@ from corr.katcp_wrapper import FpgaClient
 from datetime import datetime
 import netifaces as ni
 from numpy import (
-	abs, 
-	array, 
-	ceil, 
-	complex64, 
-	concatenate, 
-	float32, 
-	floor, 
-	int8, 
-	pi, 
-	uint32, 
-	uint64, 
-	uint8, 
+	abs,
+	array,
+	ceil,
+	complex64,
+	concatenate,
+	float32,
+	floor,
+	int8,
+	pi,
+	uint32,
+	uint64,
+	uint8,
 	zeros,
 	)
 from scipy.signal import firwin2
@@ -27,54 +27,53 @@ from time import sleep, time
 
 class Packet():
 	"""
-	Encapsulate an He6CRES packet
-	
+	Encapsulate an He6CRES packet. Header length and structure are retained from R2DAQ (aka ArtooDaq)
 	"""
-	
+
 	BYTES_IN_PAYLOAD = 8192
 	BYTES_IN_HEADER = 32
 	BYTES_IN_PACKET = BYTES_IN_PAYLOAD + BYTES_IN_HEADER
-	
+
 	@property
 	def unix_time(self):
 		return self._unix_time
-	
+
 	@property
 	def pkt_in_batch(self):
 		return self._pkt_in_batch
-	
+
 	@property
 	def digital_id(self):
 		return self._digital_id
-	
+
 	@property
 	def if_id(self):
 		return self._if_id
-	
+
 	@property
 	def user_data_1(self):
 		return self._user_data_1
-	
+
 	@property
 	def user_data_0(self):
 		return self._user_data_0
-	
+
 	@property
 	def reserved_0(self):
 		return self._reserved_0
-	
+
 	@property
 	def reserverd_1(self):
 		return self._reserved_1
-	
+
 	@property
 	def freq_not_time(self):
 		return self._freq_not_time
-	
+
 	@property
 	def data(self):
 		return self._data
-	
+
 	def __init__(self,ut=0,pktnum=0,did=0,ifid=0,ud0=0,ud1=0,res0=0,res1=0,fnt=False,data=None):
 		"""
 		Initialize Packet with the given attributes
@@ -90,23 +89,21 @@ class Packet():
 		self._reserved_1 = res1
 		self._freq_not_time = fnt
 		self._data = data
-	
+
 	def interpret_data(self):
 		"""
-		Interprets the raw 8bit data as complex-valued Fix_8_7.
-		
 		Returns
 		-------
 		x : ndarray
-		    Complex-valued array represented by the data.
+		    real-valued array represented by the data.
 		"""
-		x = array(self.data[1::2] + 1j*self.data[0::2],dtype=complex64)
+		x = array(self.data, dtype = uint16)
 		return x
-	
+
 	@classmethod
 	def FromByteString(cls,bytestr):
 		"""
-		Initialize Packet from the given byte string
+		Parse packet header and data from the given byte string, return an object of type Packet
 		"""
 		# check correct size packet
 		len_bytes = len(bytestr)
@@ -131,77 +128,64 @@ class Packet():
 				data[ii*8+jj] = int8((data_64bit[ii]>>uint64(8*jj))&uint64(0xFF))
 		return Packet(ut,pktnum,did,ifid,ud0,ud1,res0,res1,fnt,data)
 
-class ArtooDaq(object):
+class He6CRES_DAQ(object):
 	"""
-	Encapsulate R2DAQ
+	Encapsulate a DAQ object. Based on the R2DAQ (aka ArtooDaq) class from Andre Young.
 	"""
-	
+
 	_TIMEOUT = 5
-	
 	_FPGA_CLOCK = 200e6
 	_DEMUX = 16
 	_ADC_SAMPLE_RATE = _FPGA_CLOCK * _DEMUX
-	_DIGITAL_CHANNEL_WIDTH = 100e6
-	_DIGITAL_CHANNELS = ['a','b','c','d','e','f']
-	_FFT_ENGINES = ['ab','cd','ef']
+	_CHANNEL_WIDTH = 1000e6
+
 	_PHASE_LOOKUP_DEPTH = 10
-	
+
 	@property
 	def FPGA_CLOCK(self):
 		return self._FPGA_CLOCK
-	
+
 	@property
 	def DEMUX(self):
 		return self._DEMUX
-	
+
 	@property
 	def ADC_SAMPLE_RATE(self):
 		return self._ADC_SAMPLE_RATE
-	
+
 	@property
-	def DIGITAL_CHANNEL_WIDTH(self):
-		return self._DIGITAL_CHANNEL_WIDTH
-	
+	def CHANNEL_WIDTH(self):
+		return self._CHANNEL_WIDTH
+
 	@property
-	def DIGITAL_CHANNELS(self):
-		return self._DIGITAL_CHANNELS
-	
-	@property
-	def FFT_ENGINES(self):
-		return self._FFT_ENGINES
-	
-	@property
+
 	def PHASE_LOOKUP_DEPTH(self):
 		return self._PHASE_LOOKUP_DEPTH
-	
-	@property
-	def implemented_digital_channels(self):
-		return self._implemented_digital_channels
-	
+
 	@property
 	def registers(self):
 		registers = dict()
 		for k in self.roach2.listdev():
 			registers[k] = self.roach2.read_int(k)
 		return registers
-	
+
 	@property
 	def roach2(self):
 		return self._roach2
-	
+
 	@property
 	def version(self):
 		reg = self.registers
 		return (reg['rcs_lib'],reg['rcs_app'],reg['rcs_user'])
-	
+
 	def print_version(self,ver=None):
 		"""
 		Print detailed bitcode version information.
-		
+
 		Parameters
 		----------
 		ver : tuple
-		    The version tuple to interpret, as returned by the 
+		    The version tuple to interpret, as returned by the
 		    ArtooDaq.version property. If None, then the tuple is first
 		    obtained from the current ArtooDaq instance. Default is None.
 		"""
@@ -209,15 +193,15 @@ class ArtooDaq(object):
 			b31_format = ('revision system','timestamp')
 			_FORMAT_REVISION = 0
 			_FORMAT_TIMESTAMP = 1
-			
+
 			b30_rtype = ('git','svn')
 			_RTYPE_GIT = 0
 			_RTYPE_SVN = 1
-			
+
 			b28_dirty = ('all changes in revision control','changes not in revision control')
 			_DIRTY_SAVED = 0
 			_DRITY_UNSAVED = 1
-			
+
 			str_out = ''
 			v_format = (v & 0x80000000) >> 31
 			str_out = '   Format: {0}'.format(b31_format[v_format])
@@ -260,24 +244,24 @@ class ArtooDaq(object):
 		str_out = '\n'.join([str_out,'===='])
 		str_out = '\n'.join([str_out,'  Version: {0:10d}'.format(vu)])
 		print str_out
-		
+
 	def __init__(self,hostname,dsoc_desc=None,boffile=None):
 		"""
 		Initialize an ArtooDaq object.
-		
+
 		Parameters
 		----------
 		hostname : string
 		    Address of the roach2 on the 1GbE (control) network.
 		dsoc_desc : tuple
-		    A tuple with the first element the IP address / hostname and 
+		    A tuple with the first element the IP address / hostname and
 		    the second element the port where data is to be received. This
-		    argument, if not None, is passed directly to socket.bind(); see 
-		    the documentation of that class for details. In this case a 
+		    argument, if not None, is passed directly to socket.bind(); see
+		    the documentation of that class for details. In this case a
 		    socket is opened and bound to the given address. If None, then
 		    the data socket is not opened. Default is None.
 		boffile : string
-		    Program the device with this bitcode if not None. The special 
+		    Program the device with this bitcode if not None. The special
 		    filename 'latest-build' uses the current build of the bit-code.
 		    Default is None.
 		"""
@@ -289,28 +273,24 @@ class ArtooDaq(object):
 		# program bitcode
 		if not boffile is None:
 			self._start(boffile)
-		# initialize some data structures
-		self._ddc_1st = dict()
-		for did in self.DIGITAL_CHANNELS:
-			self._ddc_1st[did] = None
 		# if requested, open data socket
 		if not dsoc_desc is None:
 			self.open_dsoc(dsoc_desc)
-	
+
 	def grab_packets(self,n=1,dsoc_desc=None,close_soc=False):
 		"""
 		Grab packets using open data socket.
-		
-		Calls to this method should only be made while a data socket is 
-		open, unless a socket descriptor is provided. See open_dsoc() for 
+
+		Calls to this method should only be made while a data socket is
+		open, unless a socket descriptor is provided. See open_dsoc() for
 		details.
-		
+
 		Parameters
 		----------
 		n : int
 		    Number of packets to grab, default is 1.
 		dsoc_desc : tuple
-		    Socket descriptor tuple as for open_dsoc() method. If None, 
+		    Socket descriptor tuple as for open_dsoc() method. If None,
 		    a data socket should already be open. Default is None.
 		close_soc : boolean
 		    Close socket after grabbing the given number of packets.
@@ -328,11 +308,11 @@ class ArtooDaq(object):
 		if close_soc:
 			self.close_dsoc()
 		return pkts
-	
+
 	def open_dsoc(self,dsoc_desc):
 		"""
 		Open socket for data reception and bind.
-		
+
 		Parameters
 		----------
 		dsoc_desc: tuple
@@ -341,126 +321,27 @@ class ArtooDaq(object):
 		self._data_socket = socket(AF_INET,SOCK_DGRAM)
 		self._data_socket.bind(dsoc_desc)
 		return self._data_socket
-	
+
 	def close_dsoc(self):
 		"""
 		Close socket used for data reception.
 		"""
 		self._data_socket.close()
-	
-	def tune_ddc_1st_to_freq(self,f_c,tag='a'):
-		"""
-		Tune 1st stage DDC to the given center frequency.
-		
-		Parameters
-		----------
-		fc : float
-		    Desired center frequency for the 100 MHz channel.
-		tag : string
-		    Tag associated with the digital channel, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		"""
-		self._check_valid_digital_channel(tag)
-		# position the digital channel at f_c
-		if f_c < self.ADC_SAMPLE_RATE/4:
-			ch = ceil((f_c-self.DIGITAL_CHANNEL_WIDTH)/self.DIGITAL_CHANNEL_WIDTH) + 2
-			if not ((ch % 2) == 1):
-				ch = ch+1
-		else:
-			ch = floor((f_c-self.DIGITAL_CHANNEL_WIDTH)/self.DIGITAL_CHANNEL_WIDTH) - 2
-			if not ((ch % 2) == 1):
-				ch = ch-1
-		f_ch = self.DIGITAL_CHANNEL_WIDTH*1.5 + ch*self.DIGITAL_CHANNEL_WIDTH
-		f_lo = f_ch - f_c;
-		if f_lo < 0:
-			f_lo = f_lo + self.ADC_SAMPLE_RATE
-		# set LO parameters
-		assign_ddc1 = self._build_synth_assignments(f_lo,tag=tag)
-		# design anti-aliasing FIR filter to match the channel
-		B = self._built_in_filter_design(f_ch)
-		assign_ddc1.update(self._build_filterbank_assignments(B,tag=tag))
-		# set registers
-		self._make_assignment(assign_ddc1)
-		# update local config
-		self._ddc_1st[tag] = {
-			'f_c':f_c,
-			'f_ch':f_ch,
-			'f_lo':f_lo if f_lo < self.ADC_SAMPLE_RATE/2 else -self.ADC_SAMPLE_RATE+f_lo,
-			'B':B
-		}
-	
-	def read_ddc_1st_config(self,tag='a'):
-		"""
-		Extract configuration of 1st stage DDC.
-		
-		Parameters
-		----------
-		tag : string
-		    Tag associated with the digital channel, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Returns
-		-------
-		ddc1_cfg : dict
-		    Dictionary containing configuration information of 1st stage 
-		    DDC.
-		"""
-		self._check_valid_digital_channel(tag)
-		cfg = deepcopy(self._ddc_1st[tag])
-		d_lo,d_phi0,d_dphi_demux,d_dphi = self._extract_synth_assignments(tag)
-		d_B = self._extract_filterbank_assignments(tag)
-		cfg['digital'] = {
-			'f_lo': d_lo,
-			'B': d_B
-		}
-		return cfg
-	
-	def set_gain(self,g=1.0,tag='a'):
-		"""
-		Set gain on output of 1st stage DDC.
-		
-		Parameters
-		----------
-		g : float
-		    Real-valued gain to apply to output of first downconversion 
-		    module. Binary representation is Fix_8_4 and the caller should 
-		    ensure that the gain is within the allowable range [-8,7.9375].
-		    Values outside this range will saturate. Default is 1.0.
-		tag : string
-		    Tag associated with the digital channel, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Notes
-		-----
-		No gain control register for channels {'e','f'} yet.
-		"""
-		self._check_valid_digital_channel(tag)
-		idx = self.DIGITAL_CHANNELS.index(tag)
-		if idx > 3:
-			raise Warning("Gain control registers for channels 'e' and 'f' not implemented yet")
-			return
-		g_8bit = int8(g*16)
-		if g_8bit > 127:
-			g_8bit = 127
-		if g_8bit < -128:
-			g_8bit = -128
-		regname = 'gain_ctrl'
-		masked_val = self.registers[regname] & uint32(~(0xFF<<idx*8))
-		self._make_assignment({regname: masked_val | (g_8bit<<(idx*8))})
-	
-	def set_fft_shift(self,shift_vec='1101010101010',tag='ab'):
+
+
+	def set_fft_shift(self,shift_vec='1010101010101',tag='ab'):
 		"""
 		Set shift vector for FFT engine.
-		
+
 		Parameters
 		----------
 		shift_vec : string
-		    String given in bit-format, '1's and '0's where 1 indicates 
-		    right-shift at stage associated with the bit position. Only 
-		    the first 13 characters in the string are used. Default  is 
+		    String given in bit-format, '1's and '0's where 1 indicates
+		    right-shift at stage associated with the bit position. Only
+		    the first 13 characters in the string are used. Default  is
 		    '1101010101010' which ensures no overflow.
 		tag : string
-		    Tag selects the FFT engine to which the shift-vector is 
+		    Tag selects the FFT engine to which the shift-vector is
 		    applied. Default is 'ab'.
 		"""
 		self._check_valid_fft_engine(tag)
@@ -470,35 +351,30 @@ class ArtooDaq(object):
 		masked_val = self.registers[regname] & uint32(~(0x1FFF<<idx*13))
 		self._make_assignment({regname: masked_val | uint32(s_13bit<<(idx*13))})
 
-	def calibrate_adc_ogp(self,zdok=0,
-			oiter=10,otol=0.005,
-			giter=10,gtol=0.005,
-			piter=0,ptol=1.0,
-			verbose=10
-	):
+	def calibrate_adc_ogp(self,zdok,oiter=10,otol=0.005,giter=10,gtol=0.005,piter=0,ptol=1.0,verbose=10):
 		"""
 		Attempt to match the cores within the ADC.
 
 		Each of the four cores internal to each ADC has an offset, gain,
 		phase, and a number of integrated non-linearity parameters that
 		can be independently tuned. This method attempts to match the
-		cores within the specified ADC by tuning a subset of these 
+		cores within the specified ADC by tuning a subset of these
 		parameters.
 
 		Parameters
 		----------
 		zdok : int
 			ZDOK slot that contains the ADC, should be 0 (default is 0).
-			(Second ADC card not in bitcode)
+			(Second ADC card introduced to He6CRES bitcode)
 		oiter : int
 			Maximum number of iterations to fine-tune offset parameter (default
 			is 10).
 		otol : float
 			If the absolute value of the mean of snapshot data normalized to
-			the standard deviation from one core is below this value then the 
+			the standard deviation from one core is below this value then the
 			offset-tuning is considered sufficient (default is 0.005).
 		giter : int
-			Maximum number of iterations to fine-tune gain parameter (default 
+			Maximum number of iterations to fine-tune gain parameter (default
 			is 10).
 		gtol : float
 			If the distance between the standard deviation of the data in one
@@ -512,7 +388,7 @@ class ArtooDaq(object):
 		verbose : int
 			The higher the more verbose, control the amount of output to
 			the screen. Default is 10 (probably the highest).
-		
+
 		Returns
 		-------
 		ogp : dict
@@ -526,7 +402,7 @@ class ArtooDaq(object):
 		cp = self.calibrate_adc_phase(zdok=zdok,piter=piter,ptol=ptol,verbose=verbose)
 		return {'offset': co, 'gain': cg, 'phase': cp}
 
-	def calibrate_adc_offset(self,zdok=0,oiter=10,otol=0.005,verbose=10):
+	def calibrate_adc_offset(self,zdok,oiter=10,otol=0.005,verbose=10):
 		"""
 		Attempt to match the core offsets within the ADC.
 
@@ -545,7 +421,7 @@ class ArtooDaq(object):
 		sx1 = x1.std(axis=0)
 		mx1 = x1.mean(axis=0)/sx1
 		if verbose > 5:
-			print "    ...offset: with zero-offsets, means are                                        [{0}]".format(
+			print "    ...offset: with zero-offsets, means are [{0}]".format(
 				", ".join(["{0:+7.4f}".format(imx) for imx in mx1])
 			)
 		for ic in xrange(1,5):
@@ -554,7 +430,7 @@ class ArtooDaq(object):
 		sx2 = x2.std(axis=0)
 		mx2 = x2.mean(axis=0)/sx2
 		if verbose > 5:
-			print "    ...offset: with {0:+4.1f} mV offset, means are                                      [{1}]".format(
+			print "    ...offset: with {0:+4.1f} mV offset, means are [{1}]".format(
 				test_step,
 				", ".join(["{0:+7.4f}".format(imx) for imx in mx2])
 			)
@@ -601,7 +477,7 @@ class ArtooDaq(object):
 				print "    ...offset: solution good enough"
 		return core_offsets
 
-	def calibrate_adc_gain(self,zdok=0,giter=10,gtol=0.005,verbose=10):
+	def calibrate_adc_gain(self,zdok,giter=10,gtol=0.005,verbose=10):
 		"""
 		Attempt to match the core gains within the ADC.
 
@@ -686,10 +562,10 @@ class ArtooDaq(object):
 				print "    ...gain: solution good enough"
 		return core_gains
 
-	def calibrate_adc_phase(self,zdok=0,piter=0,ptol=1.0,verbose=10):
+	def calibrate_adc_phase(self,zdok,piter=0,ptol=1.0,verbose=10):
 		"""
 		Attempt to match the core phases within the ADC.
-		
+
 		See ArtooDaq.calibrate_adc_ogp for more details.
 		"""
 		# phase controlled by float varying over [-14,14] ps with 0.11 ps resolution
@@ -705,24 +581,24 @@ class ArtooDaq(object):
 				", ".join(["{0:+06.2f}".format(icp) for icp in core_phases])
 			)
 		return core_phases
-				
-	def _snap_per_core(self,zdok=0,groups=1):
+
+	def _snap_per_core(self,zdok,groups=1):
 		"""
 		Get a snapshot of 8-bit data per core from the ADC.
 
 		Parameters
 		----------
 		zdok : int
-			ID of the ZDOK slot, either 0 or 1 (default is 0)
+			ID of the ADC ZDOK slot, either 0 or 1
 		groups : int
 			Each snapshot grabs groups*(2**16) samples per core
-			(default is 1).
-		
+			(default value is groups=1, for 2**16=65536 samples).
+
 		Returns
 		-------
 		x : ndarray
-			A (groups*(2**16), 4)-shaped array in which data along the 
-			first dimension contains consecutive samples taken form the 
+			A (groups*(2**16), 4)-shaped array in which data along the
+			first dimension contains consecutive samples taken form the
 			same core. The data is ordered such that the index along
 			the second dimension matches core-indexing in the spi-
 			family of functions used to tune the core parameters.
@@ -734,275 +610,31 @@ class ArtooDaq(object):
                 	x_ = x_.reshape((x_.size/4,4))
 			x = concatenate((x,x_))
 		return x[:,[0,2,1,3]]
-	
+
 	def _make_assignment(self,assign_dict):
 		"""
 		Assign values to ROACH2 software registers.
-		
+
 		Assignments are made as roach2.write_int(key,val).
-		
+
 		Parameters
 		----------
 		assign_dict : dict
-		    Each key in assign_dict should correspond to a valid ROACH2 
+		    Each key in assign_dict should correspond to a valid ROACH2
 		    software register name, and each val should be int compatible.
 		"""
 		for key in assign_dict.keys():
 			val = assign_dict[key]
 			self.roach2.write_int(key,val)
-	
-	def _built_in_filter_design(self,f_ch):
-		"""
-		Design basic shape-matching 127th order FIR filter.
-		
-		The filter will attempt to match the following gain envelope:
-		    w = [0, s1, p1, p2, s1, 1]
-		    h = [0,  0,  1,  1,  0, 0]
-		where
-		    s1 = f_ch - DIGITAL_CHANNEL_WIDTH*0.6
-		    p1 = f_ch - DIGITAL_CHANNEL_WIDTH*0.4
-		    p2 = f_ch + DIGITAL_CHANNEL_WIDTH*0.4
-		    s2 = f_ch + DIGITAL_CHANNEL_WIDTH*0.6,
-		h is normalized to a maximum of 1, and w is the angular frequency 
-		normalized to pi.
-		
-		Parameters
-		----------
-		f_ch : float
-		    Center frequency of bandpass filter.
-		
-		Returns
-		-------
-		B : ndarray
-		    FIR filter coefficients.
-		"""
-		# filter channel should be at least more than digital bandwidth from sampled boundaries
-		f_lower = self.DIGITAL_CHANNEL_WIDTH
-		f_upper = self.ADC_SAMPLE_RATE/2-self.DIGITAL_CHANNEL_WIDTH
-		if f_ch <= f_lower or f_ch >= f_upper:
-			raise RuntimeError("Digital channel center frequency is {0:7.3f}MHz, but should be within ({1:7.3f},{2:7.3f}) MHz".format(f_ch/1e6,f_lower/1e6,f_upper/1e6))
-		# construct envelope
-		f_pass = f_ch + array([-1,1])*self.DIGITAL_CHANNEL_WIDTH*0.4
-		f_stop = f_ch + array([-1,1])*self.DIGITAL_CHANNEL_WIDTH*0.6
-		w_pass = f_pass/(self.ADC_SAMPLE_RATE/2)
-		w_stop = f_stop/(self.ADC_SAMPLE_RATE/2)
-		filt_gain = array([0,0,1,1,0,0])
-		filt_freq = concatenate(([0],[w_stop[0]], w_pass, [w_pass[1]], [1.0]))
-		B = firwin2(128,filt_freq,filt_gain,window='boxcar')
-		# normalize to absolute maximum of 0.5
-		B = 0.5*B/(abs(B).max())
-		return B
-	
-	def _build_synth_assignments(self,f_lo,phase_offset=0,tag='a'):
-		"""
-		Build phase increment words for synthesizer.
-		
-		Parameters
-		----------
-		f_lo : float
-		    LO frequency.
-		phase_offset : float
-		    LO phase offset in radians.
-		tag : string
-		    Tag associated with the downconverter, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Returns
-		-------
-		assign_synth : dict
-		    Each (key,val) pair can be used to assign devices as in
-		    roach2.write_int(key,val)
-		"""
-		# calculate discretized parameter values
-		phase_res = 2**self.PHASE_LOOKUP_DEPTH
-		mask = phase_res-1
-		dphi = uint32(f_lo/self.ADC_SAMPLE_RATE*phase_res)
-		dphi_demux = uint32((dphi*self.DEMUX) % phase_res)
-		phi0 = uint32(phase_offset*phase_res/(2*pi))
-		# build single 30bit value
-		word = ((dphi_demux&mask)<<(self.PHASE_LOOKUP_DEPTH*2)) | ((dphi&mask)<<self.PHASE_LOOKUP_DEPTH) | (phi0&mask)
-		assign_synth = {'ddc_1st_' + tag + '_synth_input_dphi':word}
-		return assign_synth
-	
-	def _extract_synth_assignments(self,tag='a'):
-		"""
-		Extract synthesizer settings from the contents of the control registers.
-		
-		Parameters
-		----------
-		tag : string
-		    Tag associated with the downconverter, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Returns
-		-------
-		f_lo : float
-		    Digital local oscillator frequency in Hz. If this value is 
-		    equal to half the sampling rate it is negated, and for larger 
-		    values it wraps toward -0.
-		phi0 : float
-		    Phase offset in radians.
-		dphi_demux : float
-		    Phase step per demux-group of samples in radians.
-		dphi : float
-		    Phase step per sample in radians.
-		"""
-		phase_res = 2**self.PHASE_LOOKUP_DEPTH
-		mask = phase_res-1
-		word = self.roach2.read_int('ddc_1st_' + tag + '_synth_input_dphi')
-		dphi_demux = float32((word>>(self.PHASE_LOOKUP_DEPTH*2))&mask) / phase_res * 2*pi
-		dphi = float32((word>>self.PHASE_LOOKUP_DEPTH)&mask) / phase_res * 2*pi
-		phi0 = float32(word&mask) / phase_res * 2*pi
-		f_lo = self.ADC_SAMPLE_RATE * dphi/(2*pi)
-		if f_lo >= self.ADC_SAMPLE_RATE/2:
-			f_lo = -self.ADC_SAMPLE_RATE + f_lo
-		return f_lo, phi0, dphi_demux, dphi
 
-	def _build_filterbank_assignments(self,B,tag='a'):
-		"""
-		Build FIR filter words for anti-aliasing filter.
-		
-		Parameters
-		----------
-		B : ndarray
-		    Filter coefficients for 127th order filter, or 128 coefficients 
-		    in total. These values are discretized as Fix_8_7, or 8-bit 
-		    fixed-point with a single integer bit. The range of values that 
-		    can be represented is [-1.0,0.9921875] and it is up to the 
-		    caller to ensure that the values of all filter coefficients 
-		    are properly distributed.
-		tag : string
-		    Tag associated with the downconverter, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Returns
-		-------
-		assign_filter : dict
-		    Each (key,val) pair can be used to assign devices as in
-		    roach2.write_int(key,val)
-		"""
-		s = True #signed
-		w = 8# word length
-		f = 7# fraction length
-		groupsize = 4#number of coefficients per 32bit word
-		shift_factor = uint32(2**w)
-		mask = uint32(shift_factor-1)
-		# scale B to absolute maximum of 128
-		B = B[:128]*128
-		N = len(B);
-		if not N ==128:
-			raise RuntimeError("There should be 128 filter coefficients for 1st stage DDC, but {0} received".format(N))
-		N_w = N/groupsize;
-		words = zeros(N_w,uint32)
-		for bb in xrange(N):
-			gg = bb % groupsize
-			nn = floor(bb/groupsize)
-			b_uint32 = uint32(B[bb])
-			words[nn] = words[nn] | ((b_uint32&mask)<<(w*gg))
-		# setup assignment dictionary
-		assign_filter = {}
-		base = 'ddc_1st_' + tag
-		for cb_id in xrange(8):
-			this_cb = base + '_cb{0}'.format(cb_id)
-			for g_id in xrange(4):
-				this_key = this_cb + '_g{0}'.format(g_id)
-				nn = 4*cb_id + g_id
-				this_val = words[nn]
-				assign_filter[this_key] = this_val
-		return assign_filter
-	
-	def _extract_filterbank_assignments(self,tag='a'):
-		"""
-		Extract FIR filter coefficients from the contents of the control registers.
-		
-		Parameters
-		----------
-		tag : string
-		    Tag associated with the downconverter, should be one of
-		    {'a','b','c','d','e','f'}. Default is 'a'.
-		
-		Returns
-		-------
-		B : ndarray
-		    FIR filter coefficients.
-		"""
-		s = True #signed
-		w = 8# word length
-		f = 7# fraction length
-		groupsize = 4#number of coefficients per 32bit word
-		shift_factor = uint32(2**w)
-		mask = uint32(shift_factor-1)
-		N = 128
-		N_w = N/groupsize
-		# read uint32 words
-		words = zeros(N_w,uint32)
-		base = 'ddc_1st_' + tag
-		for cb_id in xrange(8):
-			this_cb = base + '_cb{0}'.format(cb_id)
-			for g_id in xrange(4):
-				this_key = this_cb + '_g{0}'.format(g_id)
-				nn = 4*cb_id + g_id
-				words[nn] = self.roach2.read_int(this_key)
-		# decompose into filter coefficients
-		B = zeros(N,float32)
-		for bb in xrange(N):
-			gg = bb % groupsize
-			nn = floor(bb/groupsize)
-			b_int8 = ((words[nn] & (mask<<(w*gg)))>>(w*gg))
-			if b_int8 > 127: # fix negative values
-				b_int8 = b_int8 - (1<<w)
-			B[bb] = b_int8
-		B = B/128.0
-		return B
-	
-	def _check_valid_digital_channel(self,tag):
-		"""
-		Check if digital channel tag is valid.
-		
-		If the tag is invalid a RuntimeError is raised.
-		
-		Parameters
-		----------
-		tag : string
-		    Digital channel tag. Valid tags are any of {'a','b','c','d','e','f'}.
-		
-		Returns
-		-------
-		None
-		"""
-		if not tag in self.DIGITAL_CHANNELS:
-			raise RuntimeError("Invalid digital channel tag '{0}', should be one of {1}".format(tag,self.DIGITAL_CHANNELS))
-		if not tag in self.implemented_digital_channels:
-			raise Warning("Digital channels '{0}' not implemented in bitcode".format(tag))
-	
-	def _check_valid_fft_engine(self,tag):
-		"""
-		Check if FFT engine tag is valid.
-		
-		If the tag is invalid a RuntimeError is raised.
-		
-		Parameters
-		----------
-		tag : string
-		    FFT engine tag. Valid tags are any of {'ab','cd','ef'}.
-		
-		Returns
-		-------
-		None
-		"""
-		if not tag in self.FFT_ENGINES:
-			raise RuntimeError("Invalid FFT engine tag '{0}', should be one of {1}".format(tag,self.FFT_ENGINES))
-		if self.FFT_ENGINES.index(tag) > 1:
-			raise Warning("FFT engine 'ef' not yet implemented in bitcode")
-	
 	def _start(self,boffile='latest-build',do_cal=True,iface="p11p1",verbose=10):
 		"""
 		Program bitcode on device.
-		
+
 		Parameters
 		----------
 		boffile : string
-		    Filename of the bitcode to program. If 'latest-build' then 
+		    Filename of the bitcode to program. If 'latest-build' then
 		    use the current build. Default is 'latest-build'.
 		do_cal : bool
 		    If true then do ADC core calibration. Default is True.
@@ -1014,42 +646,42 @@ class ArtooDaq(object):
 		Returns
 		-------
 		"""
-		
+
 		if boffile == "latest-build":
-			boffile = "r2daq_2016_May_18_1148.bof"
-				
+			boffile = "he6_cres_correlator_2018_Sep_14_2002.bof"
+
 		# program bitcode
 		self.roach2.progdev(boffile)
 		self.roach2.wait_connected()
 		if verbose > 1:
 			print "Bitcode '", boffile, "' programmed successfully"
-		
+
 		# display clock speed
 		if verbose > 3:
 			print "Board clock is ", self.roach2.est_brd_clk(), "MHz"
-		
+
 		# ADC interface calibration
 		if verbose > 3:
-			print "Performing ADC interface calibration... (only doing ZDOK0)"
+			print "Performing ADC interface calibration... "
 		adc5g.set_test_mode(self.roach2, 0)
-		#~ adc5g.set_test_mode(self.roach2, 1) #<<---- ZDOK1 not yet in bitcode
+		adc5g.set_test_mode(self.roach2, 1)
 		adc5g.sync_adc(self.roach2)
 		opt0, glitches0 = adc5g.calibrate_mmcm_phase(self.roach2, 0, ['snap_0_snapshot',])
-		#~ opt1, glitches1 = adc5g.calibrate_mmcm_phase(self.roach2, 1, ['zdok_1_snap_data',]) #<<---- ZDOK1 not yet in bitcode
+		opt1, glitches1 = adc5g.calibrate_mmcm_phase(self.roach2, 1, ['zdok_1_snap_data',])
 		adc5g.unset_test_mode(self.roach2, 0)
-		#~ adc5g.unset_test_mode(self.roach2, 1) #<<---- ZDOK1 not yet in bitcode
+		adc5g.unset_test_mode(self.roach2, 1)
 		if verbose > 3:
 			print "...ADC interface calibration done."
 		if verbose > 5:
 			print "if0: opt0 = ",opt0, ", glitches0 = \n", array(glitches0)
-			#~ print "if1: ",opt0, glitches0  #<<---- ZDOK1 not yet in bitcode
-	
+			print "if1: ",opt0, glitches0
+
 		# ADC core calibration
 		if do_cal:
-			self.calibrate_adc_ogp(zdok=0,verbose=verbose)
-		
+			self.calibrate_adc_ogp(zdok,verbose=verbose)
+
 		# build channel-list
-		ch_list = ['a','b','c','d','e','f']
+		ch_list = ['a','b','c','d','e','f','g','h']
 		self._implemented_digital_channels = []
 		for ch in ch_list:
 			try:
@@ -1059,6 +691,7 @@ class ArtooDaq(object):
 				pass
 		if verbose > 3:
 			print "Valid channels in this build: {0}".format(self.implemented_digital_channels)
+
 
 		# hold master reset signal and arm the manual sync
 		self.roach2.write_int('master_ctrl',0x00000001 | 0x00000002)
@@ -1103,19 +736,5 @@ class ArtooDaq(object):
 		master_ctrl = self.roach2.read_int('master_ctrl')
 		master_ctrl = master_ctrl & 0xFFFFFFFC
 		self.roach2.write_int('master_ctrl',master_ctrl)
-#		# wait 100ms and then trigger start of manual sync
-#		sleep(0.1)
-#		master_ctrl = self.roach2.read_int('master_ctrl')
-#		master_ctrl = master_ctrl & 0xFFFFFFFC
-#		self.roach2.write_int('master_ctrl',master_ctrl)
-		# on the 
 		if verbose > 1:
 			print "Configuration done, system should be running"
-		#~ if verbose > 3:
-			#~ print "Hard-reset for buffer overflow error"
-		#~ master_ctrl = self.roach2.write_int('master_ctrl',0x00000001)
-		#~ self.roach2.write_int('tengbe_a_ctrl',0x80000000)
-		#~ sleep(1)
-		#~ self.roach2.write_int('tengbe_a_ctrl',0x00000000)
-		#~ master_ctrl = self.roach2.write_int('master_ctrl',0x00000000)
-	
